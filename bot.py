@@ -1,3 +1,5 @@
+from flask import Flask
+import threading
 import telebot
 from telebot import types
 import requests
@@ -10,7 +12,14 @@ import json
 # Tokenni Render'dan oladi
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask('')
 
+@app.route('/')
+def home():
+    return "Bot yoniq!"
+
+def run_web():
+    app.run(host='0.0.0.0', port=8080)
 # Foydalanuvchilar ma'lumotlarini saqlash uchun baza (Memory)
 users_data = {}
 
@@ -127,8 +136,13 @@ def handle_menu(message):
             bot.send_message(chat_id, "Siz hali `cURL` kod kiritmagansiz.")
 
 # Bot o'chib qolmasligi uchun himoya
-while True:
-    try:
-        bot.polling(none_stop=True, interval=0, timeout=20)
-    except Exception:
-        time.sleep(5)
+if __name__ == "__main__":
+    # Veb-serverni alohida oqimda ishga tushirish
+    threading.Thread(target=run_web).start()
+    
+    # Botning asosiy sikli
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=0, timeout=20)
+        except Exception:
+            time.sleep(5)
