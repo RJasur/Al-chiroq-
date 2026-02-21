@@ -112,7 +112,7 @@ def handle_menu(message):
         else:
             bot.send_message(chat_id, "Hujum allaqachon ketyapti! 🔥")
 
-    elif message.text == "🛑 To'xtatish":
+    elif message.text == "🛑 To'xtatish ":
         if user and user["is_running"]:
             user["is_running"] = False
             bot.send_message(chat_id, "🛑 Hujum to'xtatildi. ✅")
