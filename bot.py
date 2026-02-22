@@ -16,7 +16,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot yoniq va nazorat ostida!"
+    return "Bot yoniq va nazorat ostida! "
 
 def run_web():
     app.run(host='0.0.0.0', port=8080)
