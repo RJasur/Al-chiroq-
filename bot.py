@@ -23,7 +23,7 @@ def run_web():
 
 users_data = {}
 
-# Asosiy menyu
+# Asosiy menyu uchun kod yaratim
 def get_main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     btn1 = types.KeyboardButton("Manual (Qo'lda)")
@@ -32,14 +32,14 @@ def get_main_menu():
     markup.add(btn1, btn2, btn3)
     return markup
 
-# Qo'lda boshqarish menyusi
+# Qo'lda boshqariwsh uchun kod
 def get_manual_menu():
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("Boshlash", callback_data="start_manual"),
                types.InlineKeyboardButton("To'xtatish", callback_data="stop_manual"))
     return markup
 
-# Sozlamalar menyusi
+# Sozlamalar uchun yaratilgan menyu
 def get_settings_menu():
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("Akkaunt haqida", callback_data="acc_info"))
@@ -74,7 +74,7 @@ def perform_task(chat_id, duration):
     while time.time() < end_time and user.get("is_running"):
         try:
             session.post(user["url"], headers=user["headers"], json=user["data"], timeout=5)
-            time.sleep(random.uniform(0.1, 0.5)) # Har bir so'rov orasida kichik tasodifiy tanaffus
+            time.sleep(random.uniform(0.1, 0.5)) # Har bir so'rov orasida kichik tasodifiy tanaffus botni tanimasliklari uchun
         except:
             break
 
@@ -86,15 +86,15 @@ def automation_logic(chat_id):
         now = datetime.now().hour
         # Ertalab soat 6 va 11 oralig'ida ishlash
         if 6 <= now <= 11:
-            duration = random.randint(5, 9) # 5-9 sekund davomiylik
+            duration = random.randint(5,9) 
             user["is_running"] = True
             perform_task(chat_id, duration)
             user["is_running"] = False
             
-            # Keyingi urinishgacha tasodifiy vaqt kutish (masalan 1-5 minut)
+            # Keyingi urinishgacha tasodifiy vaqt kutish (masalan 1-5 minut) yaxshi ishlatish uchun
             time.sleep(random.randint(60, 300))
         else:
-            # Ish vaqti bo'lmasa, 10 minut kutib qayta tekshirish
+            # Ish vaqti bo'lmasa, 10 minut kutib qayta tekshirish bu foyda beradi
             time.sleep(600)
 
 @bot.message_handler(commands=['start'])
