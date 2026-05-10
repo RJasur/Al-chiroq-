@@ -74,7 +74,7 @@ def perform_task(chat_id, duration):
     while time.time() < end_time and user.get("is_running"):
         try:
             session.post(user["url"], headers=user["headers"], json=user["data"], timeout=5)
-            time.sleep(random.uniform(0.1, 0.5)) # Har bir so'rov orasida kichik tasodifiy tanaffus botni tanimasliklari uchun
+            time.sleep(random.uniform(0.05, 0.3)) # Har bir so'rov orasida kichik tasodifiy tanaffus botni tanimasliklari uchun
         except:
             break
 
